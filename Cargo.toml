@@ -8,11 +8,13 @@ build = "build.rs"
 
 [dependencies]
 walkdir = "2.4.0"
-image = { version = "0.24.8", features = [] }
+image = { version = "0.24.8", features = ["jpeg", "bmp", "gif", "jpeg_rayon", "png", "tiff", "webp", "webp-encoder", "libwebp"] }
 log = { version = "0.4.20", features = [] }
 env_logger = "0.11.0"
 tokio = { version = "1.35.1", features = ["full"] }
 num_cpus = "1.16.0"
+clap = {version = "4.4.18", features = ["color", "suggestions", "usage", "help", "derive", "default"] }
+colored = "2.1.0"
 
 [build-dependencies]
 winres = "0.1.12"
