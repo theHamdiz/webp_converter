@@ -1,0 +1,18 @@
+[package]
+name = "webp_converter"
+version = "0.3.0"
+edition = "2021"
+build = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+walkdir = "2.4.0"
+image = { version = "0.24.8", features = [] }
+log = { version = "0.4.20", features = [] }
+env_logger = "0.11.0"
+tokio = { version = "1.35.1", features = ["full"] }
+num_cpus = "1.16.0"
+
+[build-dependencies]
+winres = "0.1.12"
