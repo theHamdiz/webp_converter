@@ -26,11 +26,18 @@ async fn main() {
 
     let recursive = args.recursive.unwrap_or(false);
     let quality = args.quality.unwrap_or(75.0);
-    let lossless: i32 = match args.lossless.unwrap_or(true) {
+    let mut lossless: i32 = match args.lossless.unwrap_or(true) {
         true => 1,
         false => 0,
     };
+
     let compression_factor = args.compression_factor.unwrap_or(2.0);
+
+    if compression_factor != 0.0 || quality < 100.0 {
+        lossless = 0;
+    } else {
+        lossless = 1;
+    }
 
     let path = helpers::process_path_for_os(directory_path);
     let path_buff = PathBuf::from(path);
@@ -166,9 +173,9 @@ pub(crate) mod helpers {
         // Check if the file is an image and should be converted or copied.
         let p = path.path().to_string_lossy().to_string().replace('"', "");
         let path = PathBuf::from(&p);
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("jpg") | Some("jpeg") | Some("png") | Some("tiff") | Some("bmp")
-            | Some("avif") | Some("gif") => Actions::Convert,
+        match path.extension().and_then(|e| e.to_str().to_lowercase()) {
+            Some("jpg") | Some("jpeg") | Some("png") | Some("tiff") | Some("tif") | Some("bmp")
+            | Some("avif") | Some("gif") | Some("jfif") => Actions::Convert,
             Some("webp") => Actions::Copy,
             _ => Actions::Nothing,
         }
