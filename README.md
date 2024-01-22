@@ -1,6 +1,7 @@
 ## Rust WebP Image Converter
 A high-performance, concurrent, multithreaded image converter written entirely in Rust. This tool allows for the bulk or single conversion of images to the compressed WebP format via a command-line interface (CLI). It's designed with static configurations derived from extensive experience in eCommerce image management, specifically tailored to the needs encountered during my tenure as an eCommerce Manager at Adam Medical Company.
 
+![WebConverterLogo.png](src/assets/WebConverterLogo.png)
 ### Author
 #### Ahmad Hamdi Emara
 
