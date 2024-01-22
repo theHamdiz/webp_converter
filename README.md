@@ -46,7 +46,7 @@ To use the Rust WebP Image Converter, you can utilize the following command-line
 > Defaults to 75.
 
 `-c`:<COMPRESSIONFACTOR> *A number between 0 and 6 to indicate the compression factor of the compressed image.*  
-> Defaults to 3.
+> Defaults to 2.
 
 `-V`:<VERSION> *Display the program version.*  
 `-h`:<HELP> *Display the help menu with usage information.*  
