@@ -1,15 +1,14 @@
-
-use std::{fs, io};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
-use log::{info, warn, error};
-use env_logger;
-use std::env;
 use clap::Parser;
 use colored::Colorize;
+use env_logger;
+use log::{error, info, warn};
+use std::env;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 use tokio::sync::Semaphore;
 use tokio::task::spawn_blocking;
+use walkdir::WalkDir;
 
 #[tokio::main]
 async fn main() {
@@ -25,37 +24,52 @@ async fn main() {
         input.trim().to_string() // Remove the newline character at the end
     });
 
-    let compress = args.compress;
     let recursive = args.recursive.unwrap_or(false);
-
+    let quality = args.quality.unwrap_or(75.0);
+    let lossless: i32 = match args.lossless.unwrap_or(true) {
+        true => 1,
+        false => 0,
+    };
+    let compression_factor = args.compression_factor.unwrap_or(2.0);
 
     let path = helpers::process_path_for_os(directory_path);
     let path_buff = PathBuf::from(path);
 
-    if ! path_buff.exists() {
+    if !path_buff.exists() {
         let msg = "Path does not exist, terminating....".red().underline();
-        error!("{}", msg); return;
+        error!("{}", msg);
+        return;
     }
 
-    let msg = format!("Path: {}", path_buff.to_string_lossy()).green().underline();
+    let msg = format!("Path: {}", path_buff.to_string_lossy())
+        .green()
+        .underline();
     info!("{}", msg);
 
-    if path_buff.is_dir(){
+    if path_buff.is_dir() {
         info!("{}", "Directory Detected Working on it...".blue());
-        converter::convert_images_to_webp(path_buff, recursive, compress).await;
-    }else{
+        converter::convert_images_to_webp(
+            path_buff,
+            recursive,
+            quality,
+            lossless,
+            compression_factor,
+        )
+        .await;
+    } else {
         info!("{}", "Single Image File Detected...".blue());
-        let _ = converter::convert_single_photo(path_buff, compress).await;
+        let _ =
+            converter::convert_single_photo(path_buff, quality, lossless, compression_factor).await;
     }
 }
 
-
-pub(crate) mod types{
+pub(crate) mod types {
+    use colored::Colorize;
     use std::fmt::Display;
     use std::io;
     use std::path::PathBuf;
-    use colored::Colorize;
     use tokio::task::JoinError;
+    use webp::WebPMemory;
 
     #[derive(Debug, Clone)]
     pub(crate) struct WebpConverterError {
@@ -77,7 +91,6 @@ pub(crate) mod types{
             }
         }
     }
-
 
     impl From<webp::WebPEncodingError> for WebpConverterError {
         fn from(error: webp::WebPEncodingError) -> Self {
@@ -104,6 +117,17 @@ pub(crate) mod types{
         }
     }
 
+    impl From<Result<WebPMemory, WebpConverterError>> for WebpConverterError {
+        fn from(error: Result<WebPMemory, WebpConverterError>) -> Self {
+            match error {
+                Ok(_) => WebpConverterError {
+                    message: "Unknown Error".to_string(),
+                },
+                Err(e) => e,
+            }
+        }
+    }
+
     impl From<JoinError> for WebpConverterError {
         fn from(error: JoinError) -> Self {
             WebpConverterError {
@@ -113,49 +137,61 @@ pub(crate) mod types{
     }
 }
 
-pub(crate) mod helpers{
+pub(crate) mod helpers {
+    use super::*;
     use clap::Parser;
     use walkdir::DirEntry;
-    use super::*;
-
 
     #[derive(Parser, Debug)]
     #[command(author, version, about, long_about = None)]
-    pub(crate) struct Args{
-        #[arg(short = 'p', long = "path")]
+    pub(crate) struct Args {
+        #[arg(short = 'p', long = "PATH")]
         pub(crate) path: Option<String>,
-        #[arg(short = 'c', long = "compress")]
-        pub(crate) compress: Option<bool>,
-        #[arg(short = 'r', long = "recursive")]
+        #[arg(short = 'r', long = "RECURSIVE")]
         pub(crate) recursive: Option<bool>,
+        #[arg(short = 'q', long = "QUALITY", default_value = "75")]
+        pub(crate) quality: Option<f32>,
+        #[arg(short = 'l', long = "LOSSLESS", default_value = "true")]
+        pub(crate) lossless: Option<bool>,
+        #[arg(short = 'c', long = "COMPRESSIONFACTOR", default_value = "0.0")]
+        pub(crate) compression_factor: Option<f32>,
     }
 
-    pub(crate) enum Actions{
+    pub(crate) enum Actions {
         Convert,
         Copy,
-        Nothing
+        Nothing,
     }
     pub(crate) fn which_action(path: DirEntry) -> Actions {
         // Check if the file is an image and should be converted or copied.
         let p = path.path().to_string_lossy().to_string().replace('"', "");
         let path = PathBuf::from(&p);
         match path.extension().and_then(|e| e.to_str()) {
-            Some("jpg") | Some("jpeg") | Some("png") | Some("tiff") | Some("bmp") | Some("avif") | Some("gif") => Actions::Convert,
+            Some("jpg") | Some("jpeg") | Some("png") | Some("tiff") | Some("bmp")
+            | Some("avif") | Some("gif") => Actions::Convert,
             Some("webp") => Actions::Copy,
             _ => Actions::Nothing,
         }
     }
 
-
-
     pub(crate) fn process_path_for_os<S: Into<String>>(path: S) -> String {
         let mut path = path.into();
-        info!("{}", format!("Path before modifications: {}", path).green().bold());
+        info!(
+            "{}",
+            format!("Path before modifications: {}", path)
+                .green()
+                .bold()
+        );
         #[cfg(windows)]
         {
             // For Windows, if the path contains spaces and is not already quoted, quote it.
             if path.contains(' ') && !path.starts_with('"') && !path.ends_with('"') {
-                warn!("{}", format!("Path contains spaces, wrapping in quotes: {}", path).yellow().bold());
+                warn!(
+                    "{}",
+                    format!("Path contains spaces, wrapping in quotes: {}", path)
+                        .yellow()
+                        .bold()
+                );
                 // return format!("\"{}\"", path);
             }
 
@@ -167,35 +203,52 @@ pub(crate) mod helpers{
         #[cfg(not(windows))]
         {
             path = path.replace('\\', "/"); // Convert to unix style.
-            // For Unix-like systems, ensure the path is escaped properly.
-            // This simplistic approach handles spaces; adapt as needed for other special characters.
+                                            // For Unix-like systems, ensure the path is escaped properly.
+                                            // This simplistic approach handles spaces; adapt as needed for other special characters.
             path.replace(" ", "\\ ")
         }
     }
 }
 
-pub(crate) mod wio{
+pub(crate) mod wio {
     use super::*;
     pub(crate) async fn copy_image_to_output_folder(p0: &Path) -> Result<(), io::Error> {
         let filename = p0.file_name().unwrap();
 
-        let copy_path = get_or_create_output_directory(p0)
-            .join(filename);
+        let copy_path = get_or_create_output_directory(p0).join(filename);
         fs::copy(p0, copy_path.clone())?;
-
 
         if let Some(last_component) = get_or_create_output_directory(p0).components().last() {
             match last_component {
                 std::path::Component::Normal(name) => {
                     #[cfg(windows)]
-                    info!("\n{}\n", format!("Copying: {:?} to {:?}\\{:?}", p0.file_name().unwrap(), name, copy_path.file_name().unwrap()).bright_blue().bold());
+                    info!(
+                        "\n{}\n",
+                        format!(
+                            "Copying: {:?} to {:?}\\{:?}",
+                            p0.file_name().unwrap(),
+                            name,
+                            copy_path.file_name().unwrap()
+                        )
+                        .bright_blue()
+                        .bold()
+                    );
                     #[cfg(not(windows))]
-                    info!("{}", format!("Copying: {:?} to {:?}/{:?}", p0.file_name().unwrap(), name, copy_path.file_name().unwrap()).bright_blue().bold());
-                },
+                    info!(
+                        "{}",
+                        format!(
+                            "Copying: {:?} to {:?}/{:?}",
+                            p0.file_name().unwrap(),
+                            name,
+                            copy_path.file_name().unwrap()
+                        )
+                        .bright_blue()
+                        .bold()
+                    );
+                }
                 _ => println!("The last component is not a normal directory or file name."),
             }
         }
-
 
         Ok(())
     }
@@ -204,9 +257,9 @@ pub(crate) mod wio{
         // Create the "webp_converter" directory inside the original image's directory
         let parent_dir = path.parent().unwrap_or_else(|| Path::new(""));
         let webp_dir = parent_dir.join("webp_converter_output");
-        if webp_dir.exists(){
+        if webp_dir.exists() {
             webp_dir
-        }else{
+        } else {
             fs::create_dir_all(&webp_dir).unwrap();
             webp_dir
         }
@@ -234,18 +287,25 @@ pub(crate) mod wio{
         fs::set_permissions(path, perms)?;
         Ok(())
     }
-
 }
 
 pub(crate) mod converter {
+    use crate::types::WebpConverterError;
+    use image::RgbaImage;
     use std::io::ErrorKind;
     use std::sync::Arc;
-    use image::{ RgbaImage};
     use tokio::io::{AsyncWriteExt, BufWriter};
+    use webp::WebPMemory;
 
     use super::*;
 
-    pub(crate) async fn convert_images_to_webp<P: Into<PathBuf>>(path: P, recursive: bool, compress: Option<bool>) {
+    pub(crate) async fn convert_images_to_webp<P: Into<PathBuf>>(
+        path: P,
+        recursive: bool,
+        quality: f32,
+        lossless: i32,
+        compression_factor: f32,
+    ) {
         let path = path.into();
         let cpu_cores = num_cpus::get();
         let max_concurrency = std::cmp::max(1, cpu_cores - 1); // Reserve one core for the system
@@ -255,7 +315,12 @@ pub(crate) mod converter {
 
         // Configure WalkDir based on the `recursive` flag
         let walker = WalkDir::new(&path);
-        let walker = if recursive { walker } else { walker.min_depth(1).max_depth(1) }.into_iter();
+        let walker = if recursive {
+            walker
+        } else {
+            walker.min_depth(1).max_depth(1)
+        }
+        .into_iter();
 
         for entry in walker.filter_map(|e| e.ok()).filter(|e| e.path().is_file()) {
             match helpers::which_action(entry.clone()) {
@@ -264,24 +329,43 @@ pub(crate) mod converter {
                     let entry_path = entry.into_path();
 
                     let task = tokio::task::spawn(async move {
-                        let _permit = sem_clone.acquire().await.expect("Failed to acquire semaphore permit");
-                        let _ = convert_single_photo(&entry_path, compress).await;
+                        let _permit = sem_clone
+                            .acquire()
+                            .await
+                            .expect("Failed to acquire semaphore permit");
+                        let _ = convert_single_photo(
+                            &entry_path,
+                            quality,
+                            lossless,
+                            compression_factor,
+                        )
+                        .await;
                     });
 
                     tasks.push(task);
-                },
+                }
                 helpers::Actions::Copy => {
                     let sem_clone = semaphore.clone();
                     let entry_path = entry.into_path();
 
                     let task = tokio::spawn(async move {
-                        let _permit = sem_clone.acquire().await.expect("Failed to acquire semaphore permit");
-                        wio::copy_image_to_output_folder(&entry_path).await.expect("Failed to copy image");
+                        let _permit = sem_clone
+                            .acquire()
+                            .await
+                            .expect("Failed to acquire semaphore permit");
+                        wio::copy_image_to_output_folder(&entry_path)
+                            .await
+                            .expect("Failed to copy image");
                     });
 
                     tasks.push(task);
-                },
-                helpers::Actions::Nothing => warn!("\n{}\n", format!("Not a valid image file: {:?}", entry.path()).yellow().bold()),
+                }
+                helpers::Actions::Nothing => warn!(
+                    "\n{}\n",
+                    format!("Not a valid image file: {:?}", entry.path())
+                        .yellow()
+                        .bold()
+                ),
             }
         }
 
@@ -291,16 +375,30 @@ pub(crate) mod converter {
         }
     }
 
-
-    pub(crate) async fn convert_single_photo<P: Into<PathBuf>>(path: P, compress: Option<bool>) -> Result<(), types::WebpConverterError> {
-        let compress_it = compress.unwrap_or(true);
+    pub(crate) async fn convert_single_photo<P: Into<PathBuf>>(
+        path: P,
+        quality: f32,
+        lossless: i32,
+        compression_factor: f32,
+    ) -> Result<(), types::WebpConverterError> {
         let path = path.into();
+        let original_size = fs::metadata(&path)?.len() as f32;
+        let target_size = match compression_factor as i32 {
+            0 => 0,
+            _ => (original_size / compression_factor) as i32,
+        };
+
         let mut webp_dir = wio::get_or_create_output_directory(&path);
 
         if let Some(filename) = path.with_extension("webp").file_name() {
             webp_dir = webp_dir.join(filename);
         } else {
-            webp_dir = webp_dir.join(path.file_name().ok_or_else(|| Err(types::WebpConverterError::from(io::Error::new(ErrorKind::NotFound, "File not found!"))))?);
+            webp_dir = webp_dir.join(path.file_name().ok_or_else(|| {
+                Err::<PathBuf, WebpConverterError>(types::WebpConverterError::from(io::Error::new(
+                    ErrorKind::NotFound,
+                    "File not found!",
+                )))
+            })?);
         }
 
         wio::make_file_writable(&path)?;
@@ -314,66 +412,63 @@ pub(crate) mod converter {
 
         // Use spawn_blocking for the CPU-bound encoding task
         let encode_task = spawn_blocking(move || {
-            if compress_it {
-                let rgba_img: RgbaImage = img.to_rgba8();
-                let quality = 75.0;
+            let rgba_img: RgbaImage = img.to_rgba8();
 
-                // Configure WebP encoding
-                let config = webp::WebPConfig{
-                    lossless: 1,
-                    quality,
-                    method: 6,
-                    image_hint: libwebp_sys::WebPImageHint::WEBP_HINT_DEFAULT,
-                    target_size: 0,
-                    target_PSNR: 0.0,
-                    segments: 4,
-                    sns_strength: 75,
-                    filter_strength: 60,
-                    filter_sharpness: 0,
-                    filter_type: 1,
-                    autofilter: 0,
-                    alpha_compression: 1,
-                    alpha_filtering: 1,
-                    alpha_quality: 90,
-                    pass: 3,
-                    show_compressed: 0,
-                    preprocessing: 2,
-                    partitions: 0,
-                    partition_limit: 2,
-                    emulate_jpeg_size: 0,
-                    thread_level: 1,
-                    low_memory: 0,
-                    near_lossless: 75,
-                    exact: 0,
-                    use_delta_palette: 0,
-                    use_sharp_yuv: 0,
-                    qmin: 0,
-                    qmax: 0,
-                };
+            // Configure WebP encoding
+            let config = webp::WebPConfig {
+                lossless,
+                quality,
+                method: 6,
+                image_hint: libwebp_sys::WebPImageHint::WEBP_HINT_DEFAULT,
+                target_size,
+                target_PSNR: 30.0,
+                segments: 4,
+                sns_strength: 75,
+                filter_strength: 60,
+                filter_sharpness: 0,
+                filter_type: 1,
+                autofilter: 0,
+                alpha_compression: 1,
+                alpha_filtering: 1,
+                alpha_quality: 90,
+                pass: 3,
+                show_compressed: 0,
+                preprocessing: 2,
+                partitions: 0,
+                partition_limit: 2,
+                emulate_jpeg_size: 0,
+                thread_level: 1,
+                low_memory: 0,
+                near_lossless: 75,
+                exact: 0,
+                use_delta_palette: 0,
+                use_sharp_yuv: 0,
+                qmin: 0,
+                qmax: 0,
+            };
 
-                let memory: webp::WebPMemory = webp::Encoder::from_rgba(&rgba_img, img.width(), img.height())
+            let memory: webp::WebPMemory =
+                webp::Encoder::from_rgba(&rgba_img, img.width(), img.height())
                     .encode_advanced(&config)
-                    .map_err(|_| Err(types::WebpConverterError::from(webp::WebPEncodingError::VP8_ENC_ERROR_BITSTREAM_OUT_OF_MEMORY)))?; // Handle encoding errors
-                let memory_bytes: Vec<u8> = memory.to_vec();
-                Ok(memory_bytes)
-            } else {
-                // Handle non-compression case or alternative logic here
-                Err(types::WebpConverterError::from(io::Error::new(ErrorKind::Other, "Compression is disabled")))
-            }
-        }).await??; // Handle errors from spawn_blocking and encoding
+                    .map_err(|_| {
+                        Err::<WebPMemory, WebpConverterError>(WebpConverterError::from(
+                            webp::WebPEncodingError::VP8_ENC_ERROR_BITSTREAM_OUT_OF_MEMORY,
+                        ))
+                    })?; // Handle encoding errors
+            let memory_bytes: Vec<u8> = memory.to_vec();
+            Ok::<Vec<u8>, WebpConverterError>(memory_bytes)
+        })
+        .await??; // Handle errors from spawn_blocking and encoding
 
         // Finalize the file writing back in the async context
         // let encoded = &encode_task;
         writer.write_all(&encode_task).await?;
 
-        info!("\n{}\n", format!("Converted: {:?}", path).bright_green().bold());
+        info!(
+            "\n{}\n",
+            format!("Converted: {:?}", path).bright_green().bold()
+        );
 
         Ok(())
     }
-
 }
-
-
-
-
-
