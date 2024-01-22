@@ -474,20 +474,25 @@ pub(crate) mod converter {
 
         wio::make_file_writable(&path)?;
 
-        let mut img = image::open(&path)?; // Load the image synchronously to avoid async issues with WebPMemory
-
+        let img = image::open(&path)?; // Load the image synchronously to avoid async issues with WebPMemory
+        let mut resized_img: image::DynamicImage = img.clone();
         // Prepare the file creation outside of the spawn_blocking to keep async operations out of the blocking context
         let webp_dir_clone = webp_dir.clone(); // Clone path for use in async context
         let file = tokio::fs::File::create(&webp_dir_clone).await?;
         let mut writer = BufWriter::new(file);
 
         if should_resize {
-            img = resize_image(img);
+            resized_img = resize_image(img.clone());
         }
 
+        if resized_img.as_bytes().len() > img.clone().as_bytes().len()
+            || resized_img.as_bytes().len() == 0
+        {
+            resized_img = img.clone();
+        }
         // Use spawn_blocking for the CPU-bound encoding task
         let encode_task = spawn_blocking(move || {
-            let rgba_img: RgbaImage = img.to_rgba8();
+            let rgba_img: RgbaImage = resized_img.to_rgba8();
 
             // Configure WebP encoding
             let config = webp::WebPConfig {
@@ -522,13 +527,14 @@ pub(crate) mod converter {
                 qmax: 0,
             };
 
-            let memory: WebPMemory = webp::Encoder::from_rgba(&rgba_img, img.width(), img.height())
-                .encode_advanced(&config)
-                .map_err(|_| {
-                    Err::<WebPMemory, WebpConverterError>(WebpConverterError::from(
-                        webp::WebPEncodingError::VP8_ENC_ERROR_BITSTREAM_OUT_OF_MEMORY,
-                    ))
-                })?; // Handle encoding errors
+            let memory: WebPMemory =
+                webp::Encoder::from_rgba(&rgba_img, resized_img.width(), resized_img.height())
+                    .encode_advanced(&config)
+                    .map_err(|_| {
+                        Err::<WebPMemory, WebpConverterError>(WebpConverterError::from(
+                            webp::WebPEncodingError::VP8_ENC_ERROR_BITSTREAM_OUT_OF_MEMORY,
+                        ))
+                    })?; // Handle encoding errors
             let memory_bytes: Vec<u8> = memory.to_vec();
             Ok::<Vec<u8>, WebpConverterError>(memory_bytes)
         })
