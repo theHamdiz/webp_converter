@@ -381,7 +381,6 @@ dependencies = [
  "png",
  "qoi",
  "tiff",
- "webp",
 ]
 
 [[package]]
@@ -810,21 +809,24 @@ version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bb5d8e7814e92297b0e1c773ce43d290bef6c17452dafd9fc49e5edb5beba71"
 dependencies = [
+ "image",
  "libwebp-sys",
 ]
 
 [[package]]
 name = "webp_converter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "colored",
  "env_logger",
  "image",
+ "libwebp-sys",
  "log",
  "num_cpus",
  "tokio",
  "walkdir",
+ "webp",
  "winres",
 ]
 

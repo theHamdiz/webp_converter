@@ -1,6 +1,6 @@
 [package]
 name = "webp_converter"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 build = "build.rs"
 
@@ -8,13 +8,15 @@ build = "build.rs"
 
 [dependencies]
 walkdir = "2.4.0"
-image = { version = "0.24.8", features = ["jpeg", "bmp", "gif", "jpeg_rayon", "png", "tiff", "webp", "webp-encoder", "libwebp"] }
+image = { version = "0.24.8"}
 log = { version = "0.4.20", features = [] }
 env_logger = "0.11.0"
 tokio = { version = "1.35.1", features = ["full"] }
 num_cpus = "1.16.0"
 clap = {version = "4.4.18", features = ["color", "suggestions", "usage", "help", "derive", "default"] }
 colored = "2.1.0"
+webp = "0.2.6"
+libwebp-sys = "0.9.4"
 
 [build-dependencies]
 winres = "0.1.12"

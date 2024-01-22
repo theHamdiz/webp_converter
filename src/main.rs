@@ -1,41 +1,20 @@
 
-use image::io::Reader as ImageReader;
-use image::{ImageFormat};
 use std::{fs, io};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-use log::{info, error, warn, Level};
+use log::{info, warn, error};
 use env_logger;
-use env_logger::Builder;
 use std::env;
 use clap::Parser;
 use colored::Colorize;
 use tokio::sync::Semaphore;
+use tokio::task::spawn_blocking;
 
 #[tokio::main]
 async fn main() {
     env::set_var("RUST_LOG", "info");
-
-    let _ = Builder::new()
-        .format(|buf, record| {
-            let level = record.level();
-            let message = match level {
-                Level::Error => record.args().to_string().bright_red(),
-                Level::Warn => record.args().to_string().bright_yellow(),
-                Level::Info => record.args().to_string().bright_cyan().bold(),
-                Level::Debug => record.args().to_string().bright_purple(),
-                Level::Trace => record.args().to_string().normal(),
-            };
-
-            writeln!(
-                buf,
-                "{} - {}",
-                level,
-                message
-            )
-        })
-        .init();
+    env_logger::init();
 
     let args = helpers::Args::parse();
     let directory_path = args.path.unwrap_or_else(|| {
@@ -67,6 +46,70 @@ async fn main() {
     }else{
         info!("{}", "Single Image File Detected...".blue());
         let _ = converter::convert_single_photo(path_buff, compress).await;
+    }
+}
+
+
+pub(crate) mod types{
+    use std::fmt::Display;
+    use std::io;
+    use std::path::PathBuf;
+    use colored::Colorize;
+    use tokio::task::JoinError;
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct WebpConverterError {
+        pub(crate) message: String,
+    }
+
+    impl From<image::ImageError> for WebpConverterError {
+        fn from(error: image::ImageError) -> Self {
+            WebpConverterError {
+                message: format!("Image Error: {:?}", error),
+            }
+        }
+    }
+
+    impl From<io::Error> for WebpConverterError {
+        fn from(error: io::Error) -> Self {
+            WebpConverterError {
+                message: format!("IO Error: {:?}", error),
+            }
+        }
+    }
+
+
+    impl From<webp::WebPEncodingError> for WebpConverterError {
+        fn from(error: webp::WebPEncodingError) -> Self {
+            WebpConverterError {
+                message: format!("WebP Encoding Error: {:?}", error),
+            }
+        }
+    }
+
+    impl Display for WebpConverterError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", format!("Error: {}", self.message).red().bold())
+        }
+    }
+
+    impl From<Result<PathBuf, WebpConverterError>> for WebpConverterError {
+        fn from(error: Result<PathBuf, WebpConverterError>) -> Self {
+            match error {
+                Ok(_) => WebpConverterError {
+                    message: "Unknown Error".to_string(),
+                },
+                Err(e) => e,
+            }
+        }
+    }
+
+    impl From<JoinError> for WebpConverterError {
+        fn from(error: JoinError) -> Self {
+            WebpConverterError {
+                message: format!("Join Error: {:?}", error),
+            }
+        }
     }
 }
 
@@ -195,9 +238,10 @@ pub(crate) mod wio{
 }
 
 pub(crate) mod converter {
+    use std::io::ErrorKind;
     use std::sync::Arc;
-    use image::codecs::webp::{WebPEncoder, WebPQuality};
-    use image::{ImageError, RgbaImage};
+    use image::{ RgbaImage};
+    use tokio::io::{AsyncWriteExt, BufWriter};
 
     use super::*;
 
@@ -219,7 +263,7 @@ pub(crate) mod converter {
                     let sem_clone = semaphore.clone();
                     let entry_path = entry.into_path();
 
-                    let task = tokio::spawn(async move {
+                    let task = tokio::task::spawn(async move {
                         let _permit = sem_clone.acquire().await.expect("Failed to acquire semaphore permit");
                         let _ = convert_single_photo(&entry_path, compress).await;
                     });
@@ -247,7 +291,8 @@ pub(crate) mod converter {
         }
     }
 
-    pub(crate) async fn convert_single_photo<P: Into<PathBuf>>(path: P, compress: Option<bool>) -> Result<(), ImageError> {
+
+    pub(crate) async fn convert_single_photo<P: Into<PathBuf>>(path: P, compress: Option<bool>) -> Result<(), types::WebpConverterError> {
         let compress_it = compress.unwrap_or(true);
         let path = path.into();
         let mut webp_dir = wio::get_or_create_output_directory(&path);
@@ -255,41 +300,74 @@ pub(crate) mod converter {
         if let Some(filename) = path.with_extension("webp").file_name() {
             webp_dir = webp_dir.join(filename);
         } else {
-            webp_dir = webp_dir.join(path.file_name().unwrap());
+            webp_dir = webp_dir.join(path.file_name().ok_or_else(|| Err(types::WebpConverterError::from(io::Error::new(ErrorKind::NotFound, "File not found!"))))?);
         }
 
-        wio::make_file_writable(&path).unwrap_or_else(|_| {});
-        let img = image::open(path.clone())?;
-        let f = fs::File::create(&webp_dir)?;
+        wio::make_file_writable(&path)?;
 
-        match compress_it {
-            true => {
+        let img = image::open(&path)?; // Load the image synchronously to avoid async issues with WebPMemory
+
+        // Prepare the file creation outside of the spawn_blocking to keep async operations out of the blocking context
+        let webp_dir_clone = webp_dir.clone(); // Clone path for use in async context
+        let file = tokio::fs::File::create(&webp_dir_clone).await?;
+        let mut writer = BufWriter::new(file);
+
+        // Use spawn_blocking for the CPU-bound encoding task
+        let encode_task = spawn_blocking(move || {
+            if compress_it {
                 let rgba_img: RgbaImage = img.to_rgba8();
+                let quality = 75.0;
 
-                let encoder = WebPEncoder::new_lossless(&f);
-                let (width, height) = rgba_img.dimensions();
+                // Configure WebP encoding
+                let config = webp::WebPConfig{
+                    lossless: 1,
+                    quality,
+                    method: 6,
+                    image_hint: libwebp_sys::WebPImageHint::WEBP_HINT_DEFAULT,
+                    target_size: 0,
+                    target_PSNR: 0.0,
+                    segments: 4,
+                    sns_strength: 75,
+                    filter_strength: 60,
+                    filter_sharpness: 0,
+                    filter_type: 1,
+                    autofilter: 0,
+                    alpha_compression: 1,
+                    alpha_filtering: 1,
+                    alpha_quality: 90,
+                    pass: 3,
+                    show_compressed: 0,
+                    preprocessing: 2,
+                    partitions: 0,
+                    partition_limit: 2,
+                    emulate_jpeg_size: 0,
+                    thread_level: 1,
+                    low_memory: 0,
+                    near_lossless: 75,
+                    exact: 0,
+                    use_delta_palette: 0,
+                    use_sharp_yuv: 0,
+                    qmin: 0,
+                    qmax: 0,
+                };
 
-                // let quality = WebPQuality::default();
-                // let encoder = image::codecs::webp::WebPEncoder::new_with_quality(f, quality);
-                // encoder.encode(&rgba_img, width, height, image::ColorType::Rgba8)?;
-                //
-                // Ok(())
+                let memory: webp::WebPMemory = webp::Encoder::from_rgba(&rgba_img, img.width(), img.height())
+                    .encode_advanced(&config)
+                    .map_err(|_| Err(types::WebpConverterError::from(webp::WebPEncodingError::VP8_ENC_ERROR_BITSTREAM_OUT_OF_MEMORY)))?; // Handle encoding errors
+                let memory_bytes: Vec<u8> = memory.to_vec();
+                Ok(memory_bytes)
+            } else {
+                // Handle non-compression case or alternative logic here
+                Err(types::WebpConverterError::from(io::Error::new(ErrorKind::Other, "Compression is disabled")))
+            }
+        }).await??; // Handle errors from spawn_blocking and encoding
 
-                match encoder.encode(&rgba_img, width, height, img.color()) {
-                    Ok(i) => { Ok::<(), ImageError>(i) },
-                    Err(e) => {
-                        error!("\n{}\n", format!("Failed to encode image: {:?}", e).bright_red().bold());
-                        img.save_with_format(webp_dir, ImageFormat::WebP)?;
-                        Ok(())
-                    }
-                }
-            },
-            false => {
-                img.save_with_format(webp_dir, ImageFormat::WebP)?;
-                Ok(())
-            },
-        }.expect("Failed to save image");
+        // Finalize the file writing back in the async context
+        // let encoded = &encode_task;
+        writer.write_all(&encode_task).await?;
+
         info!("\n{}\n", format!("Converted: {:?}", path).bright_green().bold());
+
         Ok(())
     }
 
