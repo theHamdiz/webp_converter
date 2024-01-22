@@ -19,7 +19,7 @@ Installation
 ### Clone the repository to your local machine:
 
 ```sh
-git clone https://github.com/theHamdiz/rust-webp-converter.git
+git clone https://github.com/theHamdiz/webp_converter.git
 ```
 
 ### Navigate to the cloned repository directory:
