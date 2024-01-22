@@ -56,7 +56,10 @@ async fn main() {
     info!("{}", msg);
 
     if path_buff.is_dir() {
-        info!("{}", "Directory Detected Working on it...".blue());
+        info!(
+            "{}",
+            "Directory Detected Working on it...".bright_cyan().bold()
+        );
         converter::convert_images_to_webp(
             path_buff,
             recursive,
@@ -68,7 +71,7 @@ async fn main() {
         )
         .await;
     } else {
-        info!("{}", "Single Image File Detected...".blue());
+        info!("{}", "Single Image File Detected...".bright_blue().bold());
         let _ = converter::convert_single_photo(
             path_buff,
             quality,
@@ -319,18 +322,57 @@ pub(crate) mod wio {
         fs::set_permissions(path, perms)?;
         Ok(())
     }
+
+    pub(crate) fn cleanup(workspace_path: PathBuf) -> io::Result<()> {
+        let output_dir = get_or_create_output_directory(&workspace_path);
+        if workspace_path.exists() {
+            // check for empty or zero bytes files
+            // delete them from the filesystem.
+            for entry in fs::read_dir(output_dir)? {
+                let entry = entry?;
+                let file_size = entry.metadata()?.len();
+                if file_size == 0 {
+                    fs::remove_file(entry.path())?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) mod converter {
     use crate::types::WebpConverterError;
     use image::imageops::FilterType;
-    use image::{GenericImageView, RgbaImage};
+    use image::{DynamicImage, GenericImageView, RgbaImage};
     use std::io::ErrorKind;
     use std::sync::Arc;
     use tokio::io::{AsyncWriteExt, BufWriter};
     use webp::WebPMemory;
 
     use super::*;
+
+    // Function to decide on using resized_img or img
+    pub(crate) async fn decide_and_encode(
+        img: DynamicImage,
+        resized_img: DynamicImage,
+        quality: f32,
+        lossless: i32,
+        noise_ratio: f32,
+        target_size: i32,
+    ) -> Result<Vec<u8>, WebpConverterError> {
+        // Encode both images to WebP format in memory to compare file sizes
+        let original_encoded =
+            encode_webp(quality, lossless, noise_ratio, target_size, img).await?;
+        let resized_encoded =
+            encode_webp(quality, lossless, noise_ratio, target_size, resized_img).await?;
+        // Use the smaller one, or the original if sizes are equal
+        // This is a simplistic approach; you might choose based on other criteria
+        if resized_encoded.len() < original_encoded.len() {
+            Ok(resized_encoded)
+        } else {
+            Ok(original_encoded)
+        }
+    }
 
     pub(crate) async fn convert_images_to_webp<P: Into<PathBuf>>(
         path: P,
@@ -442,6 +484,8 @@ pub(crate) mod converter {
         for task in tasks {
             task.await.expect("Task failed to complete");
         }
+
+        wio::cleanup(path).expect("Failed to cleanup empty files.");
     }
 
     pub(crate) async fn convert_single_photo<P: Into<PathBuf>>(
@@ -451,7 +495,7 @@ pub(crate) mod converter {
         compression_factor: f32,
         should_resize: bool,
         noise_ratio: f32,
-    ) -> Result<(), types::WebpConverterError> {
+    ) -> Result<(), WebpConverterError> {
         let path = path.into();
         let original_size = fs::metadata(&path)?.len() as f32;
         let target_size = match compression_factor as i32 {
@@ -475,9 +519,12 @@ pub(crate) mod converter {
         wio::make_file_writable(&path)?;
 
         let img = image::open(&path)?; // Load the image synchronously to avoid async issues with WebPMemory
-        let mut resized_img: image::DynamicImage = img.clone();
+        let mut resized_img: DynamicImage = img.clone();
         // Prepare the file creation outside of the spawn_blocking to keep async operations out of the blocking context
         let webp_dir_clone = webp_dir.clone(); // Clone path for use in async context
+        if webp_dir_clone.exists() {
+            tokio::fs::remove_file(&webp_dir_clone).await?;
+        }
         let file = tokio::fs::File::create(&webp_dir_clone).await?;
         let mut writer = BufWriter::new(file);
 
@@ -485,12 +532,32 @@ pub(crate) mod converter {
             resized_img = resize_image(img.clone());
         }
 
-        if resized_img.as_bytes().len() > img.clone().as_bytes().len()
-            || resized_img.as_bytes().len() == 0
-        {
-            resized_img = img.clone();
+        let encode_task = decide_and_encode(
+            img.clone(),
+            resized_img.clone(),
+            quality,
+            lossless,
+            noise_ratio,
+            target_size,
+        )
+        .await?;
+        // Finalize the file writing back in the async context
+        if encode_task.len() != 0 {
+            writer.write_all(&encode_task).await?;
         }
+
+        Ok(())
+    }
+
+    pub async fn encode_webp(
+        quality: f32,
+        lossless: i32,
+        noise_ratio: f32,
+        target_size: i32,
+        resized_img: DynamicImage,
+    ) -> Result<Vec<u8>, WebpConverterError> {
         // Use spawn_blocking for the CPU-bound encoding task
+        // Handle errors from spawn_blocking and encoding
         let encode_task = spawn_blocking(move || {
             let rgba_img: RgbaImage = resized_img.to_rgba8();
 
@@ -539,14 +606,10 @@ pub(crate) mod converter {
             Ok::<Vec<u8>, WebpConverterError>(memory_bytes)
         })
         .await??; // Handle errors from spawn_blocking and encoding
-
-        // Finalize the file writing back in the async context
-        writer.write_all(&encode_task).await?;
-
-        Ok(())
+        Ok(encode_task)
     }
 
-    pub(crate) fn resize_image(image: image::DynamicImage) -> image::DynamicImage {
+    pub(crate) fn resize_image(image: DynamicImage) -> DynamicImage {
         let (width, height) = image.dimensions();
 
         // For images smaller than 700x700, return the original image.
