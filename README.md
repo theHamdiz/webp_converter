@@ -49,22 +49,27 @@ To use the Rust WebP Image Converter, you can utilize the following command-line
 `-c`:<COMPRESSIONFACTOR> *A number between 0 and 6 to indicate the compression factor of the compressed image.*  
 > Defaults to 2.
 
+`-s`:<RESIZE> *A boolean to indicate whether the image should be resized to (700x700)px or the nearest equivalent.* 
+> Defaults to false.  
+
 `-V`:<VERSION> *Display the program version.*  
 `-h`:<HELP> *Display the help menu with usage information.*  
-`-r`:<RECURSIVE> *A boolean toggle (true/false) to indicate whether the program should recursively work on internal folders (Note: this feature is not yet implemented).*  
+`-r`:<RECURSIVE> *A boolean to indicate whether the program should recursively work on internal folders.*  
+
+>Note: this feature is not yet implemented
 
 ### Examples
 
 Convert a single image with 3X compression:
 
 ```sh
-  ./webp_converter -p /path/to/image.png -c 3
+  ./webp_converter -p /path/to/image.png -c 3 -s true
 ```
 
 On `windows` that would be:
 
 ```sh
-  .\webp_converter.exe -p "path\to\image" -c 3
+  .\webp_converter.exe -p "path\to\image" -c 3 -s true
 ```
 Convert all images in a folder without compression:
 

@@ -38,6 +38,8 @@ async fn main() {
         }
     };
 
+    let should_resize = args.resize.unwrap_or(false);
+
     let path = helpers::process_path_for_os(directory_path);
     let path_buff = PathBuf::from(path);
 
@@ -60,12 +62,19 @@ async fn main() {
             quality,
             lossless,
             compression_factor,
+            should_resize,
         )
         .await;
     } else {
         info!("{}", "Single Image File Detected...".blue());
-        let _ =
-            converter::convert_single_photo(path_buff, quality, lossless, compression_factor).await;
+        let _ = converter::convert_single_photo(
+            path_buff,
+            quality,
+            lossless,
+            compression_factor,
+            should_resize,
+        )
+        .await;
     }
 }
 
@@ -161,6 +170,8 @@ pub(crate) mod helpers {
         pub(crate) lossless: Option<bool>,
         #[arg(short = 'c', long = "COMPRESSIONFACTOR", default_value = "0.0")]
         pub(crate) compression_factor: Option<f32>,
+        #[arg(short = 's', long = "RESIZE")]
+        pub(crate) resize: Option<bool>,
     }
 
     pub(crate) enum Actions {
@@ -307,7 +318,8 @@ pub(crate) mod wio {
 
 pub(crate) mod converter {
     use crate::types::WebpConverterError;
-    use image::RgbaImage;
+    use image::imageops::FilterType;
+    use image::{GenericImageView, RgbaImage};
     use std::io::ErrorKind;
     use std::sync::Arc;
     use tokio::io::{AsyncWriteExt, BufWriter};
@@ -321,6 +333,7 @@ pub(crate) mod converter {
         quality: f32,
         lossless: i32,
         compression_factor: f32,
+        should_resize: bool,
     ) {
         let path = path.into();
         let cpu_cores = num_cpus::get();
@@ -354,6 +367,7 @@ pub(crate) mod converter {
                             quality,
                             lossless,
                             compression_factor,
+                            should_resize,
                         )
                         .await;
                     });
@@ -396,6 +410,7 @@ pub(crate) mod converter {
         quality: f32,
         lossless: i32,
         compression_factor: f32,
+        should_resize: bool,
     ) -> Result<(), types::WebpConverterError> {
         let path = path.into();
         let original_size = fs::metadata(&path)?.len() as f32;
@@ -419,12 +434,16 @@ pub(crate) mod converter {
 
         wio::make_file_writable(&path)?;
 
-        let img = image::open(&path)?; // Load the image synchronously to avoid async issues with WebPMemory
+        let mut img = image::open(&path)?; // Load the image synchronously to avoid async issues with WebPMemory
 
         // Prepare the file creation outside of the spawn_blocking to keep async operations out of the blocking context
         let webp_dir_clone = webp_dir.clone(); // Clone path for use in async context
         let file = tokio::fs::File::create(&webp_dir_clone).await?;
         let mut writer = BufWriter::new(file);
+
+        if should_resize {
+            img = resize_image(img);
+        }
 
         // Use spawn_blocking for the CPU-bound encoding task
         let encode_task = spawn_blocking(move || {
@@ -486,5 +505,32 @@ pub(crate) mod converter {
         );
 
         Ok(())
+    }
+
+    pub(crate) fn resize_image(image: image::DynamicImage) -> image::DynamicImage {
+        let (width, height) = image.dimensions();
+
+        // For images smaller than 700x700, return the original image.
+        if width <= 700 && height <= 700 {
+            return image;
+        }
+
+        // Calculate the new dimensions while maintaining the aspect ratio.
+        let aspect_ratio = width as f32 / height as f32;
+        let (new_width, new_height) = if width > height {
+            let new_width = 700;
+            let new_height = (700f32 / aspect_ratio).round() as u32;
+            (new_width, new_height)
+        } else if height > width {
+            let new_height = 700;
+            let new_width = (700f32 * aspect_ratio).round() as u32;
+            (new_width, new_height)
+        } else {
+            // For square images or when width == height
+            (700, 700)
+        };
+
+        // Resize the image using the Lanczos3 algorithm for high-quality results.
+        image.resize_exact(new_width, new_height, FilterType::Lanczos3)
     }
 }
