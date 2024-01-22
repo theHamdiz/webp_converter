@@ -57,24 +57,24 @@ To use the Rust WebP Image Converter, you can utilize the following command-line
 Convert a single image with compression:
 
 ```sh
-  ./rust-webp-converter -p /path/to/image.png -c true
+  ./webp_converter -p /path/to/image.png -c true
 ```
 
 On `windows` that would be:
 
 ```sh
-  .\rust-webp-converter.exe -p "path\to\image" -c true
+  .\webp_converter.exe -p "path\to\image" -c true
 ```
 Convert all images in a folder without compression:
 
 ```sh
-./rust-webp-converter -p /path/to/folder -c false
+./webp_converter -p /path/to/folder -c false
 ```
 
 Display the version of the program:
 
 ```sh
-./rust-webp-converter -V
+./webp_converter -V
 ```
 
 ### Contributing
