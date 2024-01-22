@@ -374,27 +374,34 @@ pub(crate) mod converter {
                             lossless,
                             compression_factor,
                             should_resize,
+                            noise_ratio,
                         )
                         .await
                         {
                             Ok(_) => {
                                 info!(
                                     "\n{}\n",
-                                    format!("Converted: {:?}", path).bright_green().bold()
+                                    format!("Converted: {:?}", &entry_path)
+                                        .bright_green()
+                                        .bold()
                                 );
                             }
                             Err(_) => {
-                                match convert_single_photo(&entry_path, 75.0, 0, 0.0, false) {
+                                match convert_single_photo(&entry_path, 75.0, 0, 0.0, false, 40.0)
+                                    .await
+                                {
                                     Ok(_) => {
                                         info!(
                                             "\n{}\n",
-                                            format!("Converted: {:?}", path).bright_green().bold()
+                                            format!("Converted: {:?}", &entry_path)
+                                                .bright_green()
+                                                .bold()
                                         );
                                     }
                                     Err(e) => {
                                         error!(
                                             "\n{}\n",
-                                            format!("Failed to convert: {:?} {:?}", path, e)
+                                            format!("Failed to convert: {:?} {:?}", &entry_path, e)
                                                 .red()
                                                 .bold()
                                         );
@@ -443,6 +450,7 @@ pub(crate) mod converter {
         lossless: i32,
         compression_factor: f32,
         should_resize: bool,
+        noise_ratio: f32,
     ) -> Result<(), types::WebpConverterError> {
         let path = path.into();
         let original_size = fs::metadata(&path)?.len() as f32;
@@ -488,7 +496,7 @@ pub(crate) mod converter {
                 method: 6,
                 image_hint: libwebp_sys::WebPImageHint::WEBP_HINT_DEFAULT,
                 target_size,
-                target_PSNR: 30.0,
+                target_PSNR: noise_ratio,
                 segments: 4,
                 sns_strength: 75,
                 filter_strength: 60,
