@@ -42,6 +42,7 @@ async fn main() {
 
     let path = helpers::process_path_for_os(directory_path);
     let path_buff = PathBuf::from(path);
+    let noise_ratio = args.psnr.unwrap_or(40.0);
 
     if !path_buff.exists() {
         let msg = "Path does not exist, terminating....".red().underline();
@@ -63,6 +64,7 @@ async fn main() {
             lossless,
             compression_factor,
             should_resize,
+            noise_ratio,
         )
         .await;
     } else {
@@ -73,6 +75,7 @@ async fn main() {
             lossless,
             compression_factor,
             should_resize,
+            noise_ratio,
         )
         .await;
     }
@@ -172,6 +175,8 @@ pub(crate) mod helpers {
         pub(crate) compression_factor: Option<f32>,
         #[arg(short = 's', long = "RESIZE")]
         pub(crate) resize: Option<bool>,
+        #[arg(short = 'n', long = "NOISERATIO")]
+        pub(crate) psnr: Option<f32>,
     }
 
     pub(crate) enum Actions {
@@ -334,6 +339,7 @@ pub(crate) mod converter {
         lossless: i32,
         compression_factor: f32,
         should_resize: bool,
+        noise_ratio: f32,
     ) {
         let path = path.into();
         let cpu_cores = num_cpus::get();
@@ -362,14 +368,40 @@ pub(crate) mod converter {
                             .acquire()
                             .await
                             .expect("Failed to acquire semaphore permit");
-                        let _ = convert_single_photo(
+                        match convert_single_photo(
                             &entry_path,
                             quality,
                             lossless,
                             compression_factor,
                             should_resize,
                         )
-                        .await;
+                        .await
+                        {
+                            Ok(_) => {
+                                info!(
+                                    "\n{}\n",
+                                    format!("Converted: {:?}", path).bright_green().bold()
+                                );
+                            }
+                            Err(_) => {
+                                match convert_single_photo(&entry_path, 75.0, 0, 0.0, false) {
+                                    Ok(_) => {
+                                        info!(
+                                            "\n{}\n",
+                                            format!("Converted: {:?}", path).bright_green().bold()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "\n{}\n",
+                                            format!("Failed to convert: {:?} {:?}", path, e)
+                                                .red()
+                                                .bold()
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     });
 
                     tasks.push(task);
@@ -482,27 +514,20 @@ pub(crate) mod converter {
                 qmax: 0,
             };
 
-            let memory: webp::WebPMemory =
-                webp::Encoder::from_rgba(&rgba_img, img.width(), img.height())
-                    .encode_advanced(&config)
-                    .map_err(|_| {
-                        Err::<WebPMemory, WebpConverterError>(WebpConverterError::from(
-                            webp::WebPEncodingError::VP8_ENC_ERROR_BITSTREAM_OUT_OF_MEMORY,
-                        ))
-                    })?; // Handle encoding errors
+            let memory: WebPMemory = webp::Encoder::from_rgba(&rgba_img, img.width(), img.height())
+                .encode_advanced(&config)
+                .map_err(|_| {
+                    Err::<WebPMemory, WebpConverterError>(WebpConverterError::from(
+                        webp::WebPEncodingError::VP8_ENC_ERROR_BITSTREAM_OUT_OF_MEMORY,
+                    ))
+                })?; // Handle encoding errors
             let memory_bytes: Vec<u8> = memory.to_vec();
             Ok::<Vec<u8>, WebpConverterError>(memory_bytes)
         })
         .await??; // Handle errors from spawn_blocking and encoding
 
         // Finalize the file writing back in the async context
-        // let encoded = &encode_task;
         writer.write_all(&encode_task).await?;
-
-        info!(
-            "\n{}\n",
-            format!("Converted: {:?}", path).bright_green().bold()
-        );
 
         Ok(())
     }
